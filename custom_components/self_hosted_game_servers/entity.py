@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import GameServer, GameServersCoordinator
+from .coordinator import (
+    GameServer,
+    GameServersCoordinator,
+    device_identifier,
+    device_model,
+    device_url,
+)
 
 
 class GameServerEntity(CoordinatorEntity[GameServersCoordinator]):
@@ -29,15 +35,10 @@ class GameServerEntity(CoordinatorEntity[GameServersCoordinator]):
         server = coordinator.data[server_id]
         self._attr_unique_id = f"{entry_id}_{server_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{entry_id}_{server_id}")},
+            identifiers={(DOMAIN, device_identifier(entry_id, server_id))},
             name=server.name,
-            entry_type=DeviceEntryType.SERVICE,
-            model=f"Steam app {server.app_id}" if server.app_id else None,
-            configuration_url=(
-                f"https://store.steampowered.com/app/{server.app_id}"
-                if server.app_id
-                else None
-            ),
+            model=device_model(server.app_id),
+            configuration_url=device_url(server.app_id),
         )
 
     @property

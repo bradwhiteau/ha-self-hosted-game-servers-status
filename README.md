@@ -66,23 +66,34 @@ Go to **Settings > Devices & services > Add integration** and search for
 
 | Field | What to enter |
 | --- | --- |
-| **Public address** | Your public IPv4 address, or a host name that points to it (for example a dynamic DNS name). Leave it empty to detect it automatically, which also keeps working when your provider changes your address. |
+| **Public address** | Your public IPv4 address, or a host name that points to it (for example a dynamic DNS name). Leave it empty to detect it automatically, which also keeps working when your provider changes your address. Private addresses such as `192.168.x.x` are refused, because Steam never lists servers there. |
 | **Server address on your network** | The address of the machine running the servers, for example `192.168.1.50`. Home Assistant uses it for the direct status check. Leave it empty to use the public address instead; many home routers cannot reach their own public address from inside, so filling this in is recommended. |
 
-If your servers run on more than one machine, add the integration once per
-machine.
+The integration can be added once per public address.
+
+Currently only one machine per public address is supported. Should there be
+demand, the addition of proper multi-machine support will be considered in a
+future version.
 
 ### Servers Steam does not list
 
 A server that is only used on your own network, or that is not registered with
-Steam, can be added by hand. Open the integration's **Configure** dialog and
+Steam, can be added manually. Open the integration's **Configure** dialog and
 enter one `host:port` per line, using the game's **query port** (often the game
-port plus one; check the server's settings).
+port plus one; check the server's settings). If Steam also lists a server you
+added manually, it is monitored as the manual one, so it never appears twice.
+
+### Changing games
+
+If a different game starts using a port, its device is updated to the new game
+(a name you gave the device yourself is kept). If a game moves to a different
+query port, it appears as a new device and the old one shows as not running;
+delete the old one.
 
 ### Removing a server
 
 Delete its device from the device page. A server Steam still lists will be
-found again; one added by hand is removed in **Configure** instead.
+found again; one added manually is removed in **Configure** instead.
 
 ## Example: alert when a game server stops
 

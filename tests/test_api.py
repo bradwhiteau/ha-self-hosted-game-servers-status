@@ -14,11 +14,13 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClien
 from custom_components.self_hosted_game_servers.api import (
     CannotConnect,
     InvalidAddress,
+    NotPublicAddress,
     async_detect_public_ip,
     async_get_steam_servers,
     async_query_server,
     async_resolve_public_ip,
     parse_manual_servers,
+    validate_host,
 )
 from custom_components.self_hosted_game_servers.const import (
     PUBLIC_IP_URL,
@@ -41,7 +43,17 @@ def test_parse_manual_servers() -> None:
 
 
 @pytest.mark.parametrize(
-    "text", ["192.168.1.50", "host:abc", ":27015", "host:0", "host:70000", "a b:1"]
+    "text",
+    [
+        "192.168.1.50",
+        "host:abc",
+        ":27015",
+        "host:0",
+        "host:70000",
+        "a b:1",
+        "my..server:27015",
+        "2001:db8::1:27015",
+    ],
 )
 def test_parse_manual_servers_invalid(text: str) -> None:
     """Anything that is not host:port is rejected."""
@@ -123,14 +135,26 @@ async def test_detect_public_ip_errors(
 async def test_resolve_public_ip(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """Empty means detect, an IPv4 address passes through, IPv6 is refused."""
+    """Empty means detect, a public IPv4 address passes through."""
     aioclient_mock.get(PUBLIC_IP_URL, text=PUBLIC_IP)
     session = async_get_clientsession(hass)
 
     assert await async_resolve_public_ip(session, "  ") == PUBLIC_IP
-    assert await async_resolve_public_ip(session, " 198.51.100.7 ") == "198.51.100.7"
+    assert await async_resolve_public_ip(session, " 64.94.100.205 ") == "64.94.100.205"
+
+
+@pytest.mark.parametrize("address", ["2001:db8::1", "home..example.com", "a b"])
+async def test_resolve_public_ip_invalid(hass: HomeAssistant, address: str) -> None:
+    """IPv6 and malformed names are refused without a lookup."""
     with pytest.raises(InvalidAddress):
-        await async_resolve_public_ip(session, "2001:db8::1")
+        await async_resolve_public_ip(async_get_clientsession(hass), address)
+
+
+@pytest.mark.parametrize("address", ["192.168.1.1", "10.0.0.5", "100.64.1.1"])
+async def test_resolve_public_ip_private(hass: HomeAssistant, address: str) -> None:
+    """Private and carrier-grade NAT addresses are not public."""
+    with pytest.raises(NotPublicAddress):
+        await async_resolve_public_ip(async_get_clientsession(hass), address)
 
 
 async def test_resolve_public_ip_host_name(hass: HomeAssistant) -> None:
@@ -139,6 +163,17 @@ async def test_resolve_public_ip_host_name(hass: HomeAssistant) -> None:
     answer = [(2, 2, 17, "", (PUBLIC_IP, 0))]
     with patch.object(hass.loop, "getaddrinfo", AsyncMock(return_value=answer)):
         assert await async_resolve_public_ip(session, "home.example.org") == PUBLIC_IP
+    private = [(2, 2, 17, "", ("192.168.1.1", 0))]
+    with (
+        patch.object(hass.loop, "getaddrinfo", AsyncMock(return_value=private)),
+        pytest.raises(NotPublicAddress),
+    ):
+        await async_resolve_public_ip(session, "split-dns.example.org")
+    with (
+        patch.object(hass.loop, "getaddrinfo", AsyncMock(side_effect=UnicodeError)),
+        pytest.raises(InvalidAddress),
+    ):
+        await async_resolve_public_ip(session, "odd.example.org")
     with (
         patch.object(hass.loop, "getaddrinfo", AsyncMock(side_effect=OSError)),
         pytest.raises(InvalidAddress),
@@ -202,3 +237,12 @@ async def test_query_server_offline(
     mock_a2s.side_effect = error
     assert await async_query_server("192.168.1.50", QUERY_PORT) is None
     assert mock_a2s.await_count == QUERY_ATTEMPTS
+
+
+def test_validate_host() -> None:
+    """IPv4 addresses and DNS-encodable names pass; anything else does not."""
+    assert validate_host(" 192.168.1.50 ") == "192.168.1.50"
+    assert validate_host("game-box.local") == "game-box.local"
+    for bad in ("", "my..server", "a" * 64 + ".example", "host:1", "a b", "::1"):
+        with pytest.raises(InvalidAddress):
+            validate_host(bad)

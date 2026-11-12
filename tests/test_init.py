@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -257,7 +258,7 @@ async def test_remembered_servers_survive_restart(
 async def test_manual_servers(
     hass: HomeAssistant, mock_steam: AiohttpClientMocker, mock_a2s: AsyncMock
 ) -> None:
-    """Manual servers get devices; one Steam already covers is not doubled."""
+    """Manual servers get devices; one Steam also lists is not doubled."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_PUBLIC_ADDRESS: "", CONF_LOCAL_HOST: LOCAL_HOST},
@@ -266,19 +267,141 @@ async def test_manual_servers(
     await _setup(hass, entry)
 
     manual_id = "manual_192.168.1.60_27015"
+    overlap_id = f"manual_{LOCAL_HOST}_{QUERY_PORT}"
     assert _state(hass, entry, manual_id, "status") == STATE_ON
     assert _state(hass, entry, manual_id, "listed_on_steam") is None
-    assert _state(hass, entry, f"manual_{LOCAL_HOST}_{QUERY_PORT}", "status") is None
+    # The manually added copy of the Steam server wins; no Steam device.
+    assert _state(hass, entry, overlap_id, "status") == STATE_ON
+    assert _state(hass, entry, STEAM_ID, "status") is None
 
     registry = dr.async_get(hass)
     assert registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{manual_id}")})
 
-    # Removing it from the options removes its device after the reload.
+    # Removing them from the options removes their devices after the reload,
+    # and the Steam server takes over.
     hass.config_entries.async_update_entry(entry, options={})
     await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert not registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{manual_id}")})
+    assert not registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{overlap_id}")})
     assert registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{STEAM_ID}")})
+
+
+async def test_manual_server_later_listed_by_steam(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, mock_a2s: AsyncMock
+) -> None:
+    """A manual server that Steam starts listing is not duplicated."""
+    aioclient_mock.get(PUBLIC_IP_URL, text=PUBLIC_IP)
+    aioclient_mock.get(STEAM_SERVERS_URL, json=steam_payload())
+    manual_id = f"manual_{LOCAL_HOST}_{QUERY_PORT}"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_PUBLIC_ADDRESS: "", CONF_LOCAL_HOST: LOCAL_HOST},
+        options={CONF_MANUAL_SERVERS: f"{LOCAL_HOST}:{QUERY_PORT}"},
+    )
+    await _setup(hass, entry)
+    assert _state(hass, entry, manual_id, "status") == STATE_ON
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(PUBLIC_IP_URL, text=PUBLIC_IP)
+    aioclient_mock.get(STEAM_SERVERS_URL, json=steam_payload(steam_server()))
+    await _tick(hass, POLLS_PER_DISCOVERY)
+
+    assert _state(hass, entry, manual_id, "status") == STATE_ON
+    assert _state(hass, entry, STEAM_ID, "status") is None
+    assert (
+        len(dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)) == 1
+    )
+
+
+async def test_one_failing_server_does_not_affect_others(
+    hass: HomeAssistant, mock_steam: AiohttpClientMocker, mock_a2s: AsyncMock
+) -> None:
+    """An unexpected error for one server only marks that server down."""
+
+    async def _answer(address: tuple[str, int], **kwargs: Any) -> Any:
+        if address[0] == "192.168.1.60":
+            raise RuntimeError("boom")
+        return a2s_info()
+
+    mock_a2s.side_effect = _answer
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_PUBLIC_ADDRESS: "", CONF_LOCAL_HOST: LOCAL_HOST},
+        options={CONF_MANUAL_SERVERS: "192.168.1.60:27015"},
+    )
+    await _setup(hass, entry)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert _state(hass, entry, STEAM_ID, "status") == STATE_ON
+    assert _state(hass, entry, "manual_192.168.1.60_27015", "status") == STATE_OFF
+
+
+async def test_different_game_on_known_port(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    mock_steam: AiohttpClientMocker,
+    mock_a2s: AsyncMock,
+    hass_storage: dict[str, Any],
+) -> None:
+    """A new game on a remembered port updates the device; user names stay."""
+    await _setup(hass, config_entry)
+    registry = dr.async_get(hass)
+    identifiers = {(DOMAIN, f"{config_entry.entry_id}_{STEAM_ID}")}
+
+    valheim = {**steam_server(), "appid": 892970, "gamedir": "valheim"}
+    mock_steam.clear_requests()
+    mock_steam.get(PUBLIC_IP_URL, text=PUBLIC_IP)
+    mock_steam.get(STEAM_SERVERS_URL, json=steam_payload(valheim))
+    await _tick(hass, POLLS_PER_DISCOVERY)
+
+    device = registry.async_get_device(identifiers)
+    assert device.name == "valheim"
+    assert device.model == "Steam app 892970"
+    assert device.configuration_url == "https://store.steampowered.com/app/892970"
+    stored = hass_storage[storage_key(config_entry.entry_id)]["data"]["servers"]
+    assert stored == [{"port": QUERY_PORT, "name": "valheim", "app_id": 892970}]
+
+    registry.async_update_device(device.id, name_by_user="Game night")
+    mock_steam.clear_requests()
+    mock_steam.get(PUBLIC_IP_URL, text=PUBLIC_IP)
+    mock_steam.get(STEAM_SERVERS_URL, json=steam_payload(steam_server()))
+    await _tick(hass, POLLS_PER_DISCOVERY)
+
+    device = registry.async_get_device(identifiers)
+    assert device.name == "Enshrouded"
+    assert device.name_by_user == "Game night"
+
+
+async def test_unique_id_follows_public_ip(
+    hass: HomeAssistant, mock_steam: AiohttpClientMocker, mock_a2s: AsyncMock
+) -> None:
+    """An auto-detected address that changes moves the entry's unique id."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="64.94.100.1",
+        data={CONF_PUBLIC_ADDRESS: "", CONF_LOCAL_HOST: LOCAL_HOST},
+    )
+    await _setup(hass, entry)
+    assert entry.unique_id == PUBLIC_IP
+
+
+async def test_unique_id_not_taken_from_another_entry(
+    hass: HomeAssistant, mock_steam: AiohttpClientMocker, mock_a2s: AsyncMock
+) -> None:
+    """If another entry already owns the address, the id is left alone."""
+    MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=PUBLIC_IP,
+        data={CONF_PUBLIC_ADDRESS: PUBLIC_IP, CONF_LOCAL_HOST: ""},
+    ).add_to_hass(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="64.94.100.1",
+        data={CONF_PUBLIC_ADDRESS: "", CONF_LOCAL_HOST: LOCAL_HOST},
+    )
+    await _setup(hass, entry)
+    assert entry.unique_id == "64.94.100.1"
 
 
 async def test_manual_only_works_without_steam(
@@ -297,9 +420,13 @@ async def test_manual_only_works_without_steam(
 
 
 async def test_device_removal(
-    hass: HomeAssistant, mock_steam: AiohttpClientMocker, mock_a2s: AsyncMock
+    hass: HomeAssistant,
+    mock_steam: AiohttpClientMocker,
+    mock_a2s: AsyncMock,
+    hass_ws_client: Any,
 ) -> None:
     """Steam devices can be deleted (and forgotten); manual ones cannot."""
+    assert await async_setup_component(hass, "config", {})
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_PUBLIC_ADDRESS: "", CONF_LOCAL_HOST: LOCAL_HOST},
@@ -311,19 +438,54 @@ async def test_device_removal(
     manual_device = registry.async_get_device(
         {(DOMAIN, f"{entry.entry_id}_manual_192.168.1.60_27015")}
     )
+    client = await hass_ws_client(hass)
 
-    assert not await async_remove_config_entry_device(hass, entry, manual_device)
+    async def _remove(device: dr.DeviceEntry) -> bool:
+        await client.send_json_auto_id(
+            {
+                "type": "config/device_registry/remove_config_entry",
+                "config_entry_id": entry.entry_id,
+                "device_id": device.id,
+            }
+        )
+        return (await client.receive_json())["success"]
+
+    assert not await _remove(manual_device)
 
     # Steam no longer lists the server, so once forgotten it stays gone.
     mock_steam.clear_requests()
     mock_steam.get(PUBLIC_IP_URL, text=PUBLIC_IP)
     mock_steam.get(STEAM_SERVERS_URL, json=steam_payload())
-    assert await async_remove_config_entry_device(hass, entry, steam_device)
+    assert await _remove(steam_device)
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.LOADED
     assert STEAM_ID not in entry.runtime_data.data
     assert not registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{STEAM_ID}")})
+
+
+async def test_device_removal_while_not_loaded(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    mock_steam: AiohttpClientMocker,
+    mock_a2s: AsyncMock,
+    hass_storage: dict[str, Any],
+) -> None:
+    """A device can be deleted while the entry is unloaded or retrying."""
+    await _setup(hass, config_entry)
+    device = dr.async_get(hass).async_get_device(
+        {(DOMAIN, f"{config_entry.entry_id}_{STEAM_ID}")}
+    )
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+
+    assert await async_remove_config_entry_device(hass, config_entry, device)
+    stored = hass_storage[storage_key(config_entry.entry_id)]["data"]
+    assert stored["servers"] == []
+
+    # Nothing stored yet: deleting is still allowed and changes nothing.
+    fresh = MockConfigEntry(domain=DOMAIN, data=dict(config_entry.data))
+    fresh.add_to_hass(hass)
+    assert await async_remove_config_entry_device(hass, fresh, device)
 
 
 async def test_remove_entry_clears_storage(

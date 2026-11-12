@@ -38,7 +38,11 @@ class CannotConnect(GameServersError):
 
 
 class InvalidAddress(GameServersError):
-    """The address is not an IPv4 address or a resolvable host name."""
+    """The address is not an IPv4 address or a valid host name."""
+
+
+class NotPublicAddress(InvalidAddress):
+    """The address is valid but not reachable from the internet."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +71,31 @@ class ServerInfo:
     password_protected: bool
 
 
+def validate_host(host: str) -> str:
+    """Return the host trimmed, or raise InvalidAddress.
+
+    Accepts an IPv4 address or a host name that can be encoded for DNS.
+    Python raises UnicodeError (not OSError) when a malformed name such as
+    ``my..server`` is looked up, so such names are caught here instead.
+    """
+    host = host.strip()
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        if address.version != 4:
+            raise InvalidAddress("Only IPv4 addresses are supported")
+        return str(address)
+    if not host or any(char.isspace() or char in ":/" for char in host):
+        raise InvalidAddress(f"Not a host name: {host!r}")
+    try:
+        host.encode("idna")
+    except UnicodeError as err:
+        raise InvalidAddress(f"Not a host name: {host!r}") from err
+    return host
+
+
 def parse_manual_servers(value: str | None) -> list[tuple[str, int]]:
     """Parse ``host:port`` entries, one per line or comma separated.
 
@@ -78,9 +107,12 @@ def parse_manual_servers(value: str | None) -> list[tuple[str, int]]:
         if not entry:
             continue
         host, sep, port_text = entry.rpartition(":")
-        host = host.strip()
-        if not sep or not host or " " in host or not port_text.strip().isdecimal():
+        if not sep or not port_text.strip().isdecimal():
             raise ValueError(f"Not a host:port pair: {entry!r}")
+        try:
+            host = validate_host(host)
+        except InvalidAddress as err:
+            raise ValueError(f"Not a host:port pair: {entry!r}") from err
         port = int(port_text)
         if not 0 < port <= MAX_PORT:
             raise ValueError(f"Port out of range: {entry!r}")
@@ -89,11 +121,20 @@ def parse_manual_servers(value: str | None) -> list[tuple[str, int]]:
     return servers
 
 
+def _require_public(address: str) -> str:
+    """Return the IPv4 address, or raise NotPublicAddress if it is private."""
+    if not ipaddress.IPv4Address(address).is_global:
+        raise NotPublicAddress(f"{address} is not a public internet address")
+    return address
+
+
 async def async_detect_public_ip(session: aiohttp.ClientSession) -> str:
     """Return this network's current public IPv4 address."""
     try:
-        async with asyncio.timeout(HTTP_TIMEOUT):
-            response = await session.get(PUBLIC_IP_URL)
+        async with (
+            asyncio.timeout(HTTP_TIMEOUT),
+            session.get(PUBLIC_IP_URL) as response,
+        ):
             response.raise_for_status()
             text = (await response.text()).strip()
         return str(ipaddress.IPv4Address(text))
@@ -102,31 +143,30 @@ async def async_detect_public_ip(session: aiohttp.ClientSession) -> str:
 
 
 async def async_resolve_public_ip(session: aiohttp.ClientSession, address: str) -> str:
-    """Turn the configured public address into an IPv4 address.
+    """Turn the configured public address into a public IPv4 address.
 
     An empty address means "detect it"; a host name (for example a dynamic
-    DNS name) is resolved; an IPv4 address is returned as is.
+    DNS name) is resolved; an IPv4 address is returned as is. Addresses
+    that are not reachable from the internet are refused, because Steam
+    will never list a server there.
     """
     address = address.strip()
     if not address:
         return await async_detect_public_ip(session)
+    host = validate_host(address)
     try:
-        parsed = ipaddress.ip_address(address)
-    except ValueError:
+        return _require_public(str(ipaddress.IPv4Address(host)))
+    except ipaddress.AddressValueError:
         pass
-    else:
-        if parsed.version != 4:
-            raise InvalidAddress("Steam only lists IPv4 addresses")
-        return str(parsed)
     try:
         results = await asyncio.get_running_loop().getaddrinfo(
-            address, None, family=socket.AF_INET, type=socket.SOCK_DGRAM
+            host, None, family=socket.AF_INET, type=socket.SOCK_DGRAM
         )
-    except OSError as err:
-        raise InvalidAddress(f"Could not resolve {address}") from err
+    except (OSError, UnicodeError) as err:
+        raise InvalidAddress(f"Could not resolve {host}") from err
     if not results:
-        raise InvalidAddress(f"Could not resolve {address}")
-    return str(results[0][4][0])
+        raise InvalidAddress(f"Could not resolve {host}")
+    return _require_public(str(results[0][4][0]))
 
 
 def _parse_steam_server(raw: dict[str, Any]) -> SteamServer | None:
@@ -151,8 +191,10 @@ async def async_get_steam_servers(
 ) -> list[SteamServer]:
     """Return the game servers Steam lists at an IPv4 address."""
     try:
-        async with asyncio.timeout(HTTP_TIMEOUT):
-            response = await session.get(STEAM_SERVERS_URL, params={"addr": ip_address})
+        async with (
+            asyncio.timeout(HTTP_TIMEOUT),
+            session.get(STEAM_SERVERS_URL, params={"addr": ip_address}) as response,
+        ):
             response.raise_for_status()
             payload = await response.json(content_type=None)
     except (aiohttp.ClientError, TimeoutError, ValueError) as err:
@@ -180,6 +222,9 @@ async def async_query_server(host: str, port: int) -> ServerInfo | None:
         except (
             TimeoutError,
             OSError,
+            # A host name that cannot be encoded for DNS raises UnicodeError,
+            # a ValueError; it can never answer, so treat it as offline.
+            ValueError,
             a2s.BrokenMessageError,
             a2s.BufferExhaustedError,
         ):

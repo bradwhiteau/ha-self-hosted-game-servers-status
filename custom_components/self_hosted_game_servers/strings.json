@@ -28,10 +28,12 @@
     "error": {
       "cannot_connect": "Could not reach the Steam server list. Check your internet connection and try again.",
       "cannot_detect_ip": "Could not detect your public address. Enter it instead.",
-      "invalid_address": "Enter an IPv4 address or a host name that resolves to one."
+      "invalid_address": "Enter an IPv4 address or a host name that resolves to one.",
+      "invalid_host": "Enter an IPv4 address or a host name, for example 192.168.1.50.",
+      "not_public": "This is a private address. Enter the address your network has on the internet, or leave it empty to detect it."
     },
     "abort": {
-      "already_configured": "These addresses are already set up.",
+      "already_configured": "This public address is already set up.",
       "reconfigure_successful": "The addresses were updated."
     }
   },
@@ -44,7 +46,7 @@
           "manual_servers": "Servers"
         },
         "data_description": {
-          "manual_servers": "One per line as host:port, using the game's query port. For example 192.168.1.50:27015."
+          "manual_servers": "One per line as host:port, using the game's query port. For example 192.168.1.50:27015. If Steam also lists a server added here, it is monitored as this one."
         }
       }
     },

@@ -19,7 +19,7 @@ from custom_components.self_hosted_game_servers.const import (
     STEAM_SERVERS_URL,
 )
 
-PUBLIC_IP = "203.0.113.10"
+PUBLIC_IP = "64.94.100.204"
 LOCAL_HOST = "192.168.1.50"
 QUERY_PORT = 15637
 
@@ -92,5 +92,6 @@ def config_entry() -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         title=LOCAL_HOST,
+        unique_id=PUBLIC_IP,
         data={CONF_PUBLIC_ADDRESS: "", CONF_LOCAL_HOST: LOCAL_HOST},
     )

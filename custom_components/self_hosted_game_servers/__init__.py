@@ -7,20 +7,23 @@ for its live status.
 
 from __future__ import annotations
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, STORAGE_VERSION
-from .coordinator import GameServersConfigEntry, GameServersCoordinator, storage_key
+from .api import parse_manual_servers
+from .const import CONF_MANUAL_SERVERS, DOMAIN
+from .coordinator import (
+    GameServersConfigEntry,
+    GameServersCoordinator,
+    async_forget_stored_server,
+    async_remove_store,
+    device_identifier,
+    manual_server_id,
+)
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
-
-
-def device_identifier(entry_id: str, server_id: str) -> str:
-    """Return the device registry identifier for a server."""
-    return f"{entry_id}_{server_id}"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: GameServersConfigEntry) -> bool:
@@ -44,7 +47,7 @@ async def async_remove_entry(
     hass: HomeAssistant, entry: GameServersConfigEntry
 ) -> None:
     """Delete the remembered servers when the entry is removed."""
-    await Store(hass, STORAGE_VERSION, storage_key(entry.entry_id)).async_remove()
+    await async_remove_store(hass, entry.entry_id)
 
 
 async def async_remove_config_entry_device(
@@ -54,19 +57,25 @@ async def async_remove_config_entry_device(
 
     A manually added server is removed through the options instead. A
     Steam-discovered server is forgotten; it comes back if Steam still
-    lists it.
+    lists it. This also works while the entry is not loaded.
     """
-    coordinator = entry.runtime_data
     prefix = f"{entry.entry_id}_"
+    manual_ids = {
+        manual_server_id(host, port)
+        for host, port in parse_manual_servers(entry.options.get(CONF_MANUAL_SERVERS))
+    }
     for domain, identifier in device.identifiers:
         if domain != DOMAIN or not identifier.startswith(prefix):
             continue
         server_id = identifier.removeprefix(prefix)
-        if coordinator.is_manual(server_id):
+        if server_id in manual_ids:
             return False
-        await coordinator.async_forget(server_id)
-        # Reload so the server gets fresh entities if it is discovered again.
-        hass.config_entries.async_schedule_reload(entry.entry_id)
+        if entry.state is ConfigEntryState.LOADED:
+            await entry.runtime_data.async_forget(server_id)
+            # Reload so the server gets fresh entities if it is found again.
+            hass.config_entries.async_schedule_reload(entry.entry_id)
+        else:
+            await async_forget_stored_server(hass, entry.entry_id, server_id)
     return True
 
 
