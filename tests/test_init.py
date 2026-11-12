@@ -176,7 +176,9 @@ async def test_new_server_is_added_while_running(
 
     names = {
         device.name
-        for device in dr.async_entries_for_config_entry(registry, config_entry.entry_id)
+        for device in dr.async_entries_for_config_entry(
+            dr.async_get(hass), config_entry.entry_id
+        )
     }
     assert names == {"Enshrouded", "valheim", "Enshrouded (15647)"}
 
@@ -367,7 +369,7 @@ async def test_different_game_on_known_port(
     stored = hass_storage[storage_key(config_entry.entry_id)]["data"]["servers"]
     assert stored == [{"port": QUERY_PORT, "name": "valheim", "app_id": 892970}]
 
-    registry.async_update_device(device.id, name_by_user="Game night")
+    dr.async_get(hass).async_update_device(device.id, name_by_user="Game night")
     mock_steam.clear_requests()
     mock_steam.get(PUBLIC_IP_URL, text=PUBLIC_IP)
     mock_steam.get(STEAM_SERVERS_URL, json=steam_payload(steam_server()))
