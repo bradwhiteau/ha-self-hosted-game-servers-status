@@ -47,6 +47,17 @@ from .conftest import (
 STEAM_ID = f"steam_{QUERY_PORT}"
 
 
+def _device(
+    hass: HomeAssistant, entry_id: str, server_id: str
+) -> dr.DeviceEntry | None:
+    """Return a server's device, using a lookup that works on every version."""
+    identifier = (DOMAIN, f"{entry_id}_{server_id}")
+    for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry_id):
+        if identifier in device.identifiers:
+            return device
+    return None
+
+
 async def _setup(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
@@ -86,9 +97,7 @@ async def test_setup_creates_device_and_entities(
     await _setup(hass, config_entry)
     assert config_entry.state is ConfigEntryState.LOADED
 
-    device = dr.async_get(hass).async_get_device(
-        {(DOMAIN, f"{config_entry.entry_id}_{STEAM_ID}")}
-    )
+    device = _device(hass, config_entry.entry_id, STEAM_ID)
     assert device is not None
     assert device.name == "Enshrouded"
     assert device.model == "Steam app 1203620"
@@ -165,7 +174,6 @@ async def test_new_server_is_added_while_running(
     assert _state(hass, config_entry, "steam_2457", "status") == STATE_ON
     assert _state(hass, config_entry, "steam_15647", "status") == STATE_ON
 
-    registry = dr.async_get(hass)
     names = {
         device.name
         for device in dr.async_entries_for_config_entry(registry, config_entry.entry_id)
@@ -274,17 +282,16 @@ async def test_manual_servers(
     assert _state(hass, entry, overlap_id, "status") == STATE_ON
     assert _state(hass, entry, STEAM_ID, "status") is None
 
-    registry = dr.async_get(hass)
-    assert registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{manual_id}")})
+    assert _device(hass, entry.entry_id, manual_id)
 
     # Removing them from the options removes their devices after the reload,
     # and the Steam server takes over.
     hass.config_entries.async_update_entry(entry, options={})
     await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    assert not registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{manual_id}")})
-    assert not registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{overlap_id}")})
-    assert registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{STEAM_ID}")})
+    assert not _device(hass, entry.entry_id, manual_id)
+    assert not _device(hass, entry.entry_id, overlap_id)
+    assert _device(hass, entry.entry_id, STEAM_ID)
 
 
 async def test_manual_server_later_listed_by_steam(
@@ -346,8 +353,6 @@ async def test_different_game_on_known_port(
 ) -> None:
     """A new game on a remembered port updates the device; user names stay."""
     await _setup(hass, config_entry)
-    registry = dr.async_get(hass)
-    identifiers = {(DOMAIN, f"{config_entry.entry_id}_{STEAM_ID}")}
 
     valheim = {**steam_server(), "appid": 892970, "gamedir": "valheim"}
     mock_steam.clear_requests()
@@ -355,7 +360,7 @@ async def test_different_game_on_known_port(
     mock_steam.get(STEAM_SERVERS_URL, json=steam_payload(valheim))
     await _tick(hass, POLLS_PER_DISCOVERY)
 
-    device = registry.async_get_device(identifiers)
+    device = _device(hass, config_entry.entry_id, STEAM_ID)
     assert device.name == "valheim"
     assert device.model == "Steam app 892970"
     assert device.configuration_url == "https://store.steampowered.com/app/892970"
@@ -368,7 +373,7 @@ async def test_different_game_on_known_port(
     mock_steam.get(STEAM_SERVERS_URL, json=steam_payload(steam_server()))
     await _tick(hass, POLLS_PER_DISCOVERY)
 
-    device = registry.async_get_device(identifiers)
+    device = _device(hass, config_entry.entry_id, STEAM_ID)
     assert device.name == "Enshrouded"
     assert device.name_by_user == "Game night"
 
@@ -433,11 +438,8 @@ async def test_device_removal(
         options={CONF_MANUAL_SERVERS: "192.168.1.60:27015"},
     )
     await _setup(hass, entry)
-    registry = dr.async_get(hass)
-    steam_device = registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{STEAM_ID}")})
-    manual_device = registry.async_get_device(
-        {(DOMAIN, f"{entry.entry_id}_manual_192.168.1.60_27015")}
-    )
+    steam_device = _device(hass, entry.entry_id, STEAM_ID)
+    manual_device = _device(hass, entry.entry_id, "manual_192.168.1.60_27015")
     client = await hass_ws_client(hass)
 
     async def _remove(device: dr.DeviceEntry) -> bool:
@@ -461,7 +463,7 @@ async def test_device_removal(
 
     assert entry.state is ConfigEntryState.LOADED
     assert STEAM_ID not in entry.runtime_data.data
-    assert not registry.async_get_device({(DOMAIN, f"{entry.entry_id}_{STEAM_ID}")})
+    assert not _device(hass, entry.entry_id, STEAM_ID)
 
 
 async def test_device_removal_while_not_loaded(
@@ -473,9 +475,7 @@ async def test_device_removal_while_not_loaded(
 ) -> None:
     """A device can be deleted while the entry is unloaded or retrying."""
     await _setup(hass, config_entry)
-    device = dr.async_get(hass).async_get_device(
-        {(DOMAIN, f"{config_entry.entry_id}_{STEAM_ID}")}
-    )
+    device = _device(hass, config_entry.entry_id, STEAM_ID)
     assert await hass.config_entries.async_unload(config_entry.entry_id)
 
     assert await async_remove_config_entry_device(hass, config_entry, device)

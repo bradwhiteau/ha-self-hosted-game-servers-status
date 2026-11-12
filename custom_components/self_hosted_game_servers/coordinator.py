@@ -189,17 +189,19 @@ class GameServersCoordinator(DataUpdateCoordinator[dict[str, GameServer]]):
         separately and shows it in place of this one.
         """
         registry = dr.async_get(self.hass)
-        identifier = device_identifier(
-            self.config_entry.entry_id, steam_server_id(port)
-        )
-        if device := registry.async_get_device(identifiers={(DOMAIN, identifier)}):
-            record = self._known[port]
-            registry.async_update_device(
-                device.id,
-                name=record["name"],
-                model=device_model(record["app_id"]),
-                configuration_url=device_url(record["app_id"]),
-            )
+        entry_id = self.config_entry.entry_id
+        identifier = (DOMAIN, device_identifier(entry_id, steam_server_id(port)))
+        # Searched within this entry's devices: the registry's lookup by
+        # identifier changed in Home Assistant 2026.10.
+        for device in dr.async_entries_for_config_entry(registry, entry_id):
+            if identifier in device.identifiers:
+                record = self._known[port]
+                registry.async_update_device(
+                    device.id,
+                    name=record["name"],
+                    model=device_model(record["app_id"]),
+                    configuration_url=device_url(record["app_id"]),
+                )
 
     def _track_public_ip(self, public_ip: str) -> None:
         """Keep the entry's unique id equal to the current public address."""
