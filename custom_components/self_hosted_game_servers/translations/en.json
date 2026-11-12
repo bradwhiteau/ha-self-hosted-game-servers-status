@@ -1,0 +1,85 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Self-hosted game servers",
+        "description": "Steam is asked which game servers are listed at your public address. Each one found becomes a device.",
+        "data": {
+          "public_address": "Public address",
+          "local_host": "Server address on your network"
+        },
+        "data_description": {
+          "public_address": "Your public IPv4 address or a host name that points to it. Leave empty to detect it automatically.",
+          "local_host": "The address Home Assistant uses to check each game directly, for example 192.168.1.50. Leave empty to use the public address."
+        }
+      },
+      "reconfigure": {
+        "title": "Self-hosted game servers",
+        "data": {
+          "public_address": "Public address",
+          "local_host": "Server address on your network"
+        },
+        "data_description": {
+          "public_address": "Your public IPv4 address or a host name that points to it. Leave empty to detect it automatically.",
+          "local_host": "The address Home Assistant uses to check each game directly, for example 192.168.1.50. Leave empty to use the public address."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Steam server list. Check your internet connection and try again.",
+      "cannot_detect_ip": "Could not detect your public address. Enter it instead.",
+      "invalid_address": "Enter an IPv4 address or a host name that resolves to one."
+    },
+    "abort": {
+      "already_configured": "These addresses are already set up.",
+      "reconfigure_successful": "The addresses were updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Other servers",
+        "description": "Add game servers Steam does not list, such as ones only used on your own network.",
+        "data": {
+          "manual_servers": "Servers"
+        },
+        "data_description": {
+          "manual_servers": "One per line as host:port, using the game's query port. For example 192.168.1.50:27015."
+        }
+      }
+    },
+    "error": {
+      "invalid_servers": "Each line must be host:port, for example 192.168.1.50:27015."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "status": {
+        "name": "Status"
+      },
+      "listed_on_steam": {
+        "name": "Listed on Steam"
+      }
+    },
+    "sensor": {
+      "players": {
+        "name": "Players"
+      },
+      "max_players": {
+        "name": "Player limit"
+      },
+      "latency": {
+        "name": "Latency"
+      },
+      "server_name": {
+        "name": "Server name"
+      },
+      "map": {
+        "name": "Map"
+      },
+      "version": {
+        "name": "Version"
+      }
+    }
+  }
+}
