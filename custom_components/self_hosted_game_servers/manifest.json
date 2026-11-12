@@ -1,12 +1,20 @@
 {
   "domain": "self_hosted_game_servers",
   "name": "Self-Hosted Game Servers Status",
-  "codeowners": ["@bradwhiteau"],
+  "categories": [
+    "media_entertainment.gaming",
+    "computers_network.monitoring"
+  ],
+  "codeowners": [
+    "@bradwhiteau"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/bradwhiteau/ha-self-hosted-game-servers-status",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/bradwhiteau/ha-self-hosted-game-servers-status/issues",
-  "requirements": ["python-a2s==1.4.2"],
+  "requirements": [
+    "python-a2s==1.4.2"
+  ],
   "version": "0.1.0"
 }
